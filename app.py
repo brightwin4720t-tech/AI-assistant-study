@@ -25,40 +25,54 @@ def verify_password(password: str, hashed_password: str) -> bool:
     pwd_bytes = password.encode("utf-8")[:72]
     return bcrypt.checkpw(pwd_bytes, hashed_password.encode("utf-8"))
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Configure Supabase
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-IS_SUPABASE = bool(SUPABASE_URL and "supabase.co" in SUPABASE_URL)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if IS_SUPABASE else None
+IS_SUPABASE = bool(SUPABASE_URL and "supabase.co" in SUPABASE_URL and SUPABASE_KEY)
+supabase: Client = None
+if IS_SUPABASE:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Failed to initialize Supabase client: {e}")
+        IS_SUPABASE = False
 
 # Configure Gemini AI
 # google.genai client is configured per-call via the Client object
 
 # --- Database Fallback Setup ---
 # If Supabase credentials are not set, we fall back to local SQLite so you can test immediately.
-DATABASE = 'database.db'
+# On Vercel, the root filesystem is read-only, so write to /tmp
+DATABASE = '/tmp/database.db' if os.environ.get("VERCEL") else os.path.join(BASE_DIR, 'database.db')
 
 def init_db():
-    with sqlite3.connect(DATABASE) as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL
-            )
-        ''')
-        # --- Data Collection Table ---
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS chat_messages (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_email TEXT NOT NULL,
-                message   TEXT NOT NULL,
-                reply     TEXT NOT NULL,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        ''')
-        conn.commit()
+    if IS_SUPABASE:
+        return
+    try:
+        with sqlite3.connect(DATABASE) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL
+                )
+            ''')
+            # --- Data Collection Table ---
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_email TEXT NOT NULL,
+                    message   TEXT NOT NULL,
+                    reply     TEXT NOT NULL,
+                    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            ''')
+            conn.commit()
+    except Exception as e:
+        print(f"Warning: Database initialization failed: {e}")
 
 init_db()
 
@@ -136,7 +150,8 @@ Guidelines for your teaching:
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    with open("templates/index.html", "r", encoding="utf-8") as f:
+    template_path = os.path.join(BASE_DIR, "templates", "index.html")
+    with open(template_path, "r", encoding="utf-8") as f:
         html_content = f.read()
     return HTMLResponse(content=html_content)
 
